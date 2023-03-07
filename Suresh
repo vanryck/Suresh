@@ -1,1 +1,1012 @@
-THis is a test
+
+echo off
+
+call Params.bat
+
+:: ---------------------------------------------------------------
+:: SET VARIABLES
+:: 1st param is tablename
+:: 2nd param is db name
+:: 3rd param is schema name
+:: ---------------------------------------------------------------
+
+set TName=%1
+set DBName=%2
+set SCName=%3
+set FQTName=%2.%3.%1
+
+echo %TgtSvr%
+
+:: ----------------------------
+:: Data File for BCP In\Out
+:: ----------------------------
+
+set OFile=D:\bcp\Data\%FQTName%_data
+
+:: ----------------------------
+:: Error File for BCP In\Out
+:: ----------------------------
+
+set EinFile=D:\bcp\Logs\ErrorLogs\%FQTName%_err_in.txt
+set EoutFile=D:\bcp\Logs\ErrorLogs\%FQTName%_err_out.txt
+
+:: ----------------------------
+:: Log for Overall Load
+:: ----------------------------
+
+set TblLoadLog=D:\bcp\Logs\%FQTName%_log.txt
+
+set InLoadLog=D:\bcp\Logs\LoadLogs\%FQTName%_in.txt
+set OutLoadLog=D:\bcp\Logs\LoadLogs\%FQTName%_out.txt
+
+:: ----------------------------
+:: Begin Load
+:: ----------------------------
+
+echo %TgtSvr% %FQTName% > %TblLoadLog% 
+echo [%date%, %time%] >> %TblLoadLog% 
+
+:: ---------------------------------------------------------------
+:: UPDATE TABLE SYB2SQL_LOAD TO START
+:: ---------------------------------------------------------------
+
+sqlcmd -S %TgtSvr% -d dev -Q "DELETE FROM dev.dbo.SYB2SQL_LOAD WHERE DATABASE_NM = '%DBName%' AND SCHEMA_NM = '%SCName%' AND TABLE_NM = '%TName%' " -b -U FACETS -P Hyuti6#asjt8 
+
+sqlcmd -S %TgtSvr% -d dev -Q "INSERT INTO dev.dbo.SYB2SQL_LOAD (DATABASE_NM, SCHEMA_NM, TABLE_NM) values ('%DBName%', '%SCName%', '%TName%') " -b -U FACETS -P Hyuti6#asjt8 
+
+:: ---------------------------------------------------------------
+:: PRE LOAD TASKS
+set "SavePt=DsbleTrigs"
+:: ---------------------------------------------------------------
+
+sqlcmd -S %TgtSvr% -d %2 -Q "DISABLE TRIGGER ALL ON %FQTName%" -b -U FACETS -P Hyuti6#asjt8
+
+:: ---------------------------------------------------------------
+:: TRUNCATE DESTINATION TABLE
+set "SavePt=Truncate"
+:: ---------------------------------------------------------------
+
+sqlcmd -S %TgtSvr% -d %2 -Q "TRUNCATE TABLE %FQTName%" -b -U FACETS -P Hyuti6#asjt8
+
+
+:: ---------------------------------------------------------------
+:: BCP TABLE OUT OF SYBASE
+set "SavePt=BCP OUT"
+:: ---------------------------------------------------------------
+
+:: BCP Out start, Update load stats
+sqlcmd -S %TgtSvr% -d dev -Q "UPDATE dev.dbo.SYB2SQL_LOAD SET BCP_OUT_START = GETDATE() WHERE DATABASE_NM = '%DBName%' AND SCHEMA_NM = '%SCName%' AND TABLE_NM = '%TName%' " -b -U FACETS -P Hyuti6#asjt8 
+
+:: ----------------------------
+:: Begin Load
+:: ----------------------------
+
+echo %FQTName%  > %OutLoadLog% 
+echo [%date%, %time%] >> %OutLoadLog% 
+
+:: BCP Out 
+bcp %FQTName% out  %OFile% -e %EoutFile% -c -t "~|~" -S %SrcSvr% -U FACETS -P Hyuti6#asjt8  >> %OutLoadLog% 
+
+IF %errorlevel% NEQ 0 goto :ErrorOutput
+
+echo [%date%, %time%] >> %OutLoadLog% 
+echo [%date%, %time%] >> %TblLoadLog% 
+
+:: BCP Out ended, update load stats
+sqlcmd -S %TgtSvr% -d dev -Q "UPDATE dev.dbo.SYB2SQL_LOAD SET BCP_OUT_END = GETDATE() WHERE DATABASE_NM = '%DBName%' AND SCHEMA_NM = '%SCName%' AND TABLE_NM = '%TName%' " -b -U FACETS -P Hyuti6#asjt8  
+
+:: ---------------------------------------------------------------
+:: BCP TABLE INTO SQL SERVER
+set "SavePt=BCP IN"
+:: ---------------------------------------------------------------
+
+:: BCP In start, Update load stats
+sqlcmd -S %TgtSvr% -d dev -Q "UPDATE dev.dbo.SYB2SQL_LOAD SET BCP_IN_START = GETDATE() WHERE DATABASE_NM = '%DBName%' AND SCHEMA_NM = '%SCName%' AND TABLE_NM = '%TName%' " -b -U FACETS -P Hyuti6#asjt8  
+
+
+echo %FQTName%  > %InLoadLog% 
+echo [%date%, %time%] >> %InLoadLog% 
+
+:: BCP In 
+C:\"Program Files"\"Microsoft SQL Server"\"Client SDK"\ODBC\170\Tools\Binn\bcp %FQTName% in %OFile% -S %TgtSvr% -c -t "~|~" -a 65535 -b 100000 -E -e %EinFile%  -U FACETS -P Hyuti6#asjt8 >> %InLoadLog% 
+
+IF %errorlevel% NEQ 0 goto :ErrorOutput
+
+set "SavePt=PostLoad"
+
+sqlcmd -S %TgtSvr% -d dev -Q "UPDATE dev.dbo.SYB2SQL_LOAD SET BCP_IN_END = GETDATE() WHERE DATABASE_NM = '%DBName%' AND SCHEMA_NM = '%SCName%' AND TABLE_NM = '%TName%' " -b -U FACETS -P Hyuti6#asjt8 
+
+echo [%date%, %time%] 
+
+:: set "SavePt=EnableTrigs"
+
+sqlcmd -S %TgtSvr% -d %2 -Q "ENABLE TRIGGER ALL ON %FQTName%" -b -U FACETS -P Hyuti6#asjt8 
+
+:: ---------------------------------------------------------------
+:: IF SUCCESSFUL, DELETE OUT FILE AND EXIT
+:: ---------------------------------------------------------------
+
+echo [%date%, %time%] >> %TblLoadLog% 
+
+del %OFile%
+
+exit /b %ERRORLEVEL%
+
+:: ---------------------------------------------------------------
+:: IF NOT SUCCESSFUL, ECHO FAILURE REASON AND EXIT
+:: ---------------------------------------------------------------
+
+:ErrorOutput
+
+ECHO %SavePt%   >> %TblLoadLog% 
+ECHO Failure Reason is %ERRORLEVEL%   >> %TblLoadLog% 
+exit /b %ERRORLEVEL%
+
+
+
+
+*_Params:
+set SrcSvr=SYBBATCH
+set TgtSvr=FACETSPRODLIST
+
+Index_Script:
+
+DROP TABLE IF EXISTS dev.dbo.AHEAD_TBL_IDXS
+
+CREATE TABLE dev.dbo.AHEAD_TBL_IDXS (
+DATABASE_NM     NVARCHAR(30),
+SCHEMA_NM       NVARCHAR(20),
+TABLE_NM        NVARCHAR(50),
+INDEX_NM        NVARCHAR(80),
+FQ_NM           NVARCHAR(160),
+INDEX_TYPE      VARCHAR(20),
+IDX_DROP_SQL    VARCHAR(MAX),
+IDX_CREATE_SQL  VARCHAR(MAX) )
+
+-------------------------------------------------------------------------------
+--- SCRIPT TO GENERATE THE CREATION SCRIPT OF ALL PK AND UNIQUE CONSTRAINTS.
+-------------------------------------------------------------------------------
+
+declare @SchemaName varchar(100)
+declare @TableName varchar(256)
+declare @IndexName varchar(256)
+declare @ColumnName varchar(100)
+declare @is_unique_constraint varchar(100)
+declare @IndexTypeDesc varchar(100)
+declare @FileGroupName varchar(100)
+declare @is_disabled varchar(100)
+declare @IndexOptions varchar(max)
+declare @IndexColumnId int
+declare @IsDescendingKey int 
+declare @IsIncludedColumn int
+declare @TSQLScripCreationIndex varchar(max)
+declare @TSQLScripDisableIndex varchar(max)
+declare @is_primary_key varchar(100)
+
+declare CursorIndex cursor for
+ select schema_name(t.schema_id) [schema_name], t.name, ix.name,
+ case when ix.is_unique_constraint = 1 then ' UNIQUE ' else '' END 
+    ,case when ix.is_primary_key = 1 then ' PRIMARY KEY ' else '' END 
+ , ix.type_desc,
+  case when ix.is_padded=1 then 'PAD_INDEX = ON, ' else 'PAD_INDEX = OFF, ' end
+ + case when ix.allow_page_locks=1 then 'ALLOW_PAGE_LOCKS = ON, ' else 'ALLOW_PAGE_LOCKS = OFF, ' end
+ + case when ix.allow_row_locks=1 then  'ALLOW_ROW_LOCKS = ON, ' else 'ALLOW_ROW_LOCKS = OFF, ' end
+ + case when INDEXPROPERTY(t.object_id, ix.name, 'IsStatistics') = 1 then 'STATISTICS_NORECOMPUTE = ON, ' else 'STATISTICS_NORECOMPUTE = OFF, ' end
+ + case when ix.ignore_dup_key=1 then 'IGNORE_DUP_KEY = ON, ' else 'IGNORE_DUP_KEY = OFF, ' end
+ + 'SORT_IN_TEMPDB = OFF, FILLFACTOR =' + CAST(ix.fill_factor AS VARCHAR(3)) AS IndexOptions
+ , FILEGROUP_NAME(ix.data_space_id) FileGroupName
+ from sys.tables t 
+ inner join sys.indexes ix on t.object_id=ix.object_id
+ where ix.type_desc = 'CLUSTERED'
+ and  (ix.is_primary_key=1 or ix.is_unique_constraint=1) 
+ and schema_name(t.schema_id) IN ('dbo','audit')
+ --and t.name LIKE 'CMC%'
+ and t.is_ms_shipped=0 and t.name<>'sysdiagrams'
+ order by schema_name(t.schema_id), t.name, ix.name
+open CursorIndex
+fetch next from CursorIndex into  @SchemaName, @TableName, @IndexName, @is_unique_constraint, @is_primary_key, @IndexTypeDesc, @IndexOptions, @FileGroupName
+while (@@fetch_status=0)
+begin
+ declare @IndexColumns varchar(max)
+ declare @IncludedColumns varchar(max)
+ set @IndexColumns=''
+ set @IncludedColumns=''
+ declare CursorIndexColumn cursor for 
+ select col.name, ixc.is_descending_key, ixc.is_included_column
+ from sys.tables tb 
+ inner join sys.indexes ix on tb.object_id=ix.object_id
+ inner join sys.index_columns ixc on ix.object_id=ixc.object_id and ix.index_id= ixc.index_id
+ inner join sys.columns col on ixc.object_id =col.object_id  and ixc.column_id=col.column_id
+ where ix.type>0 and (ix.is_primary_key=1 or ix.is_unique_constraint=1)
+ and schema_name(tb.schema_id)=@SchemaName and tb.name=@TableName and ix.name=@IndexName
+ order by ixc.key_ordinal
+ open CursorIndexColumn 
+ fetch next from CursorIndexColumn into  @ColumnName, @IsDescendingKey, @IsIncludedColumn
+ while (@@fetch_status=0)
+ begin
+  if @IsIncludedColumn=0 
+    set @IndexColumns=@IndexColumns + @ColumnName  + case when @IsDescendingKey=1  then ' DESC, ' else  ' ASC, ' end
+  else 
+   set @IncludedColumns=@IncludedColumns  + @ColumnName  +', ' 
+     
+  fetch next from CursorIndexColumn into @ColumnName, @IsDescendingKey, @IsIncludedColumn
+ end
+ close CursorIndexColumn
+ deallocate CursorIndexColumn
+ set @IndexColumns = substring(@IndexColumns, 1, len(@IndexColumns)-1)
+ set @IncludedColumns = case when len(@IncludedColumns) >0 then substring(@IncludedColumns, 1, len(@IncludedColumns)-1) else '' end
+--  print @IndexColumns
+--  print @IncludedColumns
+
+set @TSQLScripCreationIndex =''
+set @TSQLScripDisableIndex =''
+set  @TSQLScripCreationIndex='ALTER TABLE '+  QUOTENAME(@SchemaName) +'.'+ QUOTENAME(@TableName)+ ' ADD CONSTRAINT ' +  QUOTENAME(@IndexName) + @is_unique_constraint + @is_primary_key + +@IndexTypeDesc +  '('+@IndexColumns+') '+ 
+ case when len(@IncludedColumns)>0 then CHAR(13) +'INCLUDE (' + @IncludedColumns+ ')' else '' end + CHAR(13)+'WITH (' + @IndexOptions+ ') ON ' + QUOTENAME(@FileGroupName) + ';'  
+
+set @TSQLScripDisableIndex ='ALTER TABLE '+QUOTENAME(@SchemaName) +'.'+ QUOTENAME(@TableName)+ ' DROP CONSTRAINT ' +QUOTENAME(@IndexName)+ '  WITH ( ONLINE = OFF );  GO '
+
+--print @TSQLScripCreationIndex
+--print @TSQLScripDisableIndex
+
+
+INSERT INTO dev.dbo.AHEAD_TBL_IDXS (DB_NAME(),
+						@SchemaName,
+						@TableName,
+						@IndexName,
+						DB_NAME()+'.'+@SchemaName+'.'+@IndexName,
+						@IndexTypeDesc,
+						@TSQLScripDisableIndex,
+						@TSQLScripCreationIndex)
+
+
+fetch next from CursorIndex into  @SchemaName, @TableName, @IndexName, @is_unique_constraint, @is_primary_key, @IndexTypeDesc, @IndexOptions, @FileGroupName
+
+end
+close CursorIndex
+deallocate CursorIndex
+
+------------------------------------------------------------------------------------------
+--- SCRIPT TO GENERATE THE CREATION SCRIPT OF CLUSTERED INDEXES (NOT PK CONSTRAINTS)
+------------------------------------------------------------------------------------------
+
+INSERT INTO dev.dbo.AHEAD_TBL_IDXS 
+SELECT DB_NAME()  AS DATABASE_NM,
+    Schema_name(T.Schema_id)   AS SCHEMA_NM,
+	T.name  AS TABLE_NM,
+	I.name  AS INDEX_NM,
+	DB_NAME()+'.'+Schema_name(T.Schema_id)+'.'+I.name,
+	I.type_desc,
+	'DROP INDEX '+Schema_name(T.Schema_id)+'.'+I.name+' ON '+Schema_name(T.Schema_id)+'.'+I.name+' WITH ( ONLINE = OFF );  GO ',
+    ' CREATE ' + 
+    CASE WHEN I.is_unique = 1 THEN ' UNIQUE ' ELSE '' END  +  
+    I.type_desc COLLATE DATABASE_DEFAULT +' INDEX ' +   
+    I.name  + ' ON '  +  
+    Schema_name(T.Schema_id)+'.'+T.name + ' ( ' + 
+    KeyColumns + ' )  ' + 
+    ISNULL(' INCLUDE ('+IncludedColumns+' ) ','') + 
+    ISNULL(' WHERE  '+I.Filter_definition,'') + ' WITH ( ' + 
+    CASE WHEN I.is_padded = 1 THEN ' PAD_INDEX = ON ' ELSE ' PAD_INDEX = OFF ' END + ','  + 
+    'FILLFACTOR = '+CONVERT(CHAR(5),CASE WHEN I.Fill_factor = 0 THEN 100 ELSE I.Fill_factor END) + ','  + 
+    -- default value 
+    'SORT_IN_TEMPDB = OFF '  + ','  + 
+    CASE WHEN I.ignore_dup_key = 1 THEN ' IGNORE_DUP_KEY = ON ' ELSE ' IGNORE_DUP_KEY = OFF ' END + ','  + 
+    CASE WHEN ST.no_recompute = 0 THEN ' STATISTICS_NORECOMPUTE = OFF ' ELSE ' STATISTICS_NORECOMPUTE = ON ' END + ','  + 
+    -- default value  
+    ' DROP_EXISTING = ON '  + ','  + 
+    -- default value  
+    ' ONLINE = OFF '  + ','  + 
+   CASE WHEN I.allow_row_locks = 1 THEN ' ALLOW_ROW_LOCKS = ON ' ELSE ' ALLOW_ROW_LOCKS = OFF ' END + ','  + 
+   CASE WHEN I.allow_page_locks = 1 THEN ' ALLOW_PAGE_LOCKS = ON ' ELSE ' ALLOW_PAGE_LOCKS = OFF ' END  + ' ) ON [' + 
+   DS.name + ' ] '  [CreateIndexScript] 
+FROM sys.indexes I   
+ JOIN sys.tables T ON T.object_id = I.object_id and schema_name(T.schema_id) IN ('dbo','audit') --  and T.name like 'CMC%'  
+ JOIN sys.sysindexes SI ON I.object_id = SI.id AND I.index_id = SI.indid 
+ JOIN (SELECT * FROM (  
+    SELECT IC2.object_id , IC2.index_id ,  
+        STUFF((SELECT ' , ' + C.name + CASE WHEN MAX(CONVERT(INT,IC1.is_descending_key)) = 1 THEN ' DESC ' ELSE ' ASC ' END 
+    FROM sys.index_columns IC1  
+    JOIN sys.columns C   
+       ON C.object_id = IC1.object_id   
+       AND C.column_id = IC1.column_id   
+       AND IC1.is_included_column = 0  
+    WHERE IC1.object_id = IC2.object_id   
+       AND IC1.index_id = IC2.index_id   
+    GROUP BY IC1.object_id,C.name,index_id  
+    ORDER BY MAX(IC1.key_ordinal)  
+       FOR XML PATH('')), 1, 2, '') KeyColumns   
+    FROM sys.index_columns IC2   
+    --WHERE IC2.Object_id = object_id('Person.Address') --Comment for all tables  
+    GROUP BY IC2.object_id ,IC2.index_id) tmp3 )tmp4   
+  ON I.object_id = tmp4.object_id AND I.index_id = tmp4.index_id  
+ JOIN sys.stats ST ON ST.object_id = I.object_id AND ST.stats_id = I.index_id   
+ JOIN sys.data_spaces DS ON I.data_space_id=DS.data_space_id   
+ JOIN sys.filegroups FG ON I.data_space_id=FG.data_space_id   
+ LEFT JOIN (SELECT * FROM (   
+    SELECT IC2.object_id , IC2.index_id ,   
+        STUFF((SELECT ' , ' + C.name  
+    FROM sys.index_columns IC1   
+    JOIN sys.columns C    
+       ON C.object_id = IC1.object_id    
+       AND C.column_id = IC1.column_id    
+       AND IC1.is_included_column = 1   
+    WHERE IC1.object_id = IC2.object_id    
+       AND IC1.index_id = IC2.index_id    
+    GROUP BY IC1.object_id,C.name,index_id   
+       FOR XML PATH('')), 1, 2, '') IncludedColumns    
+   FROM sys.index_columns IC2    
+   --WHERE ---IC2.object_id = object_id('dbo.CMC_CDPP_LI_ITS_PR') --Comment for all tables   
+   GROUP BY IC2.object_id ,IC2.index_id) tmp1   
+   WHERE IncludedColumns IS NOT NULL ) tmp2    
+ON tmp2.object_id = I.object_id AND tmp2.index_id = I.index_id   
+WHERE I.is_primary_key = 0 AND I.is_unique_constraint = 0 
+AND I.type_desc = 'CLUSTERED'
+ 
+
+------------------------------------------------------------------------------------------
+--- SCRIPT TO GENERATE THE CREATION SCRIPT OF NONCLUSTERED INDEXES 
+------------------------------------------------------------------------------------------
+
+INSERT INTO dev.dbo.AHEAD_TBL_IDXS
+SELECT distinct DB_NAME(), SCHEMA_NAME(sys.objects.schema_id), 
+       sys.objects.name  as TABLE_NM,
+	   sys.indexes.name  as INDEX_NM,
+	   DB_NAME()+'.'+SCHEMA_NAME(sys.objects.schema_id)+'.'+sys.indexes.name  as FQ_NM,
+	   sys.indexes.type_desc  as INDEX_TYPE,
+        'ALTER INDEX ' + sys.indexes.name + ' ON  ' + SCHEMA_NAME(sys.objects.schema_id)+'.'+ sys.objects.name + ' DISABLE;' +CHAR(13)+CHAR(10) as IDX_DROP_SQL,
+       'ALTER INDEX ' + sys.indexes.name + ' ON  ' + SCHEMA_NAME(sys.objects.schema_id)+'.'+ sys.objects.name + ' REBUILD;' +CHAR(13)+CHAR(10) as IDX_CREATE_SQL
+FROM sys.indexes
+JOIN sys.objects 
+    ON sys.indexes.object_id = sys.objects.object_id
+WHERE sys.indexes.type_desc = 'NONCLUSTERED'
+  AND sys.objects.type_desc = 'USER_TABLE'
+  and SCHEMA_NAME(sys.objects.schema_id) IN ('dbo','audit') 
+
+  SELECT * FROM ##PKS
+
+
+-----------------------------------------------------------------------------
+---  VALIDATION
+-----------------------------------------------------------------------------
+
+SELECT distinct DB_NAME() as DATABASE_NM, SCHEMA_NAME(sys.objects.schema_id) AS SCHEMA_NM, 
+       sys.objects.name  as TABLE_NM,
+	   sys.indexes.name  as INDEX_NM,
+	   DB_NAME()+'.'+SCHEMA_NAME(sys.objects.schema_id)+'.'+sys.indexes.name  as FQ_NM,
+	   sys.indexes.type_desc  as INDEX_TYPE
+FROM sys.indexes
+JOIN sys.objects 
+    ON sys.indexes.object_id = sys.objects.object_id
+WHERE sys.objects.type_desc = 'USER_TABLE'
+AND sys.indexes.name IS NOT NULL
+AND SCHEMA_NAME(sys.objects.schema_id) IN ('dbo','audit')
+
+Accum Fix:
+/**********************************************************************************
+SQL PROGRAM  = Accums Integration
+Author       = Allan VanRyckeghem
+Create Date  = 09/21/2021
+
+PURPOSE:  Fix accums with amounts applied to
+          incorrect accumulators 
+
+This program will find individual limit accumulators in 
+family accumulator table (FATX).  These accums are 
+identified by their accumulator number.  
+
+INPUT TABLES:  facets.dbo.CMC_FATX_ACCM_TXN
+
+OUTPUT TABLES: tempdb.dbo.AHEAD_FATX_ACCUM_TXN_DEL_ROWS
+                       Contains FATX member and Family
+					   accum rows which will be modified for insert
+					   and also used for deletes from FATX
+                tempdb.dbo.AHEAD_FATX_ACCUM_TXN_INS_ROWS (CONTAINS ADDED ROWS)
+                       Contains corrected FATX accum rows to be inserted into 
+					   Facets FATX accum rows which will be modified
+                tempdb.dbo.AHEAD_FATX_AFFECTED_SUBS
+				       Contains distinct SBSB_CK, ACAC_ACC_NO, FATX_BEN_BEG_DT
+					   for all the "bad" accum rows
+                facets.dbo.CMC_FATX_ACCM_TXN
+				       affected accum rows will be deleted and new merged
+					   accums will be inserted
+				       
+Details: There are 6 ind accum numbers in the family accum (FATX) table.
+         These should not be in the FATX table and represent pharmacy claims
+		 which were incorrectly applied to the ind accum number.  
+
+		 The amounts from these 6 accum number need to be applied to family 
+		 accums
+		    ind -> fam
+			-----------
+			L1 -> L2        (scenario 1)
+			L5 -> L9        (scenario 2)
+			L6 -> L10       (scenario 3)
+			L7 -> L8        (scenario 4)
+			L906 -> L907    (scenario 5)
+			L908 -> L910    (scenario 6)
+
+Processing Logic: 
+        1a.  Extract all rows inserted in error into temp table
+		       ##AHEAD_FATX_BAD_ROWS
+
+		1b.  Extract distinct subs, ben period, member accum nbr
+		        from error rows for use in following steps 
+				(for performance)
+
+				tempdb.dbo.AHEAD_FATX_AFFECTED_SUBS
+
+		2.  For rows impacted by each of the 6 scenarios 
+			2a.  Extract all FATX rows for affected accums (Both IND and FAM)
+		         accums and insert into scenario specific temp table
+
+				 ##AHEAD_FATX_1_2
+				 ##AHEAD_FATX_5_9
+				 ##AHEAD_FATX_6_10
+				 ##AHEAD_FATX_7_8
+				 ##AHEAD_FATX_906_907
+				 ##AHEAD_FATX_908_910
+
+			2b.  Combine accum rows from previous step and merge accums into
+			     combined scenario user temp table. Recalculate running totals,
+				 resequencing FATX_SEQ_NO, and setting SYS_LAST_UPD_DTM for the
+				 member accum rows only.
+
+				 tempdb.dbo.AHEAD_FATX_ACCUM_TXN_INS_ROWS
+
+		3.  Backup FATX rows to be deleted from facets.dbo.CMC_FATX_ACCUM_TXN
+		      into user temp table. This is done by combining temp tables 
+			  created in step 2a.
+
+			     tempdb.dbo.AHEAD_FATX_ACCUM_TXN_DEL_ROWS
+
+		4. Insert all new FATX rows from tempdb.dbo.AHEAD_FATX_ACCUM_TXN_INS_ROWS
+		     into facets.dbo.CMC_FATX_ACCUM_TXN
+
+Revision History:
+Name		Date		Description
+vanryca		9/21/2022	Initial creation.	
+
+**********************************************************************************/
+
+SET NOCOUNT ON
+
+DECLARE @DML_COUNT     INT
+DECLARE @INS_COUNT     INT
+DECLARE @DEL_COUNT     INT
+
+PRINT 'PGM START '+CAST(GETDATE() AS VARCHAR(25))
+
+----------------------------------------------------------------------
+--  BUILD SHELL TABLES 
+--   tempdb.dbo.AHEAD_FATX_ACCUM_TXN_INS_ROWS (Corrected rows to be added to FATX)
+--   tempdb.dbo.AHEAD_FATX_ACCUM_TXN_DEL_ROWS (Rows to be deleted from FATX)
+----------------------------------------------------------------------
+
+DROP TABLE IF EXISTS tempdb.dbo.AHEAD_FATX_ACCUM_TXN_INS_ROWS
+SELECT *
+INTO tempdb.dbo.AHEAD_FATX_ACCUM_TXN_INS_ROWS
+FROM facets.dbo.CMC_FATX_ACCUM_TXN
+WHERE 1=2
+
+DROP TABLE IF EXISTS tempdb.dbo.AHEAD_FATX_ACCUM_TXN_DEL_ROWS
+SELECT *
+INTO tempdb.dbo.AHEAD_FATX_ACCUM_TXN_DEL_ROWS
+FROM facets.dbo.CMC_FATX_ACCUM_TXN
+WHERE 1=2
+
+-----------------------------------------------------------------------------------
+--  Step 1a.  Extract all rows inserted in error
+--            ##AHEAD_FATX_BAD_ROWS - Rows inserted in error
+--            using SQL provided by KC as a way to identify
+PRINT '1.  Extract FATX Mbr accum rows into DEL_ROWS'
+-----------------------------------------------------------------------------------
+
+DROP TABLE IF EXISTS ##AHEAD_FATX_BAD_ROWS
+
+SELECT * 
+INTO ##AHEAD_FATX_BAD_ROWS
+FROM facets.dbo.CMC_FATX_ACCUM_TXN        FATX
+WHERE ACAC_ACC_NO IN (1,5,6,7,906,908) 
+AND FATX_CREATE_DTM >= '6/20/2022'
+AND FATX_CREATE_DTM <  '8/1/2022'
+AND FATX_ACC_TYPE = 'L'
+ORDER BY FATX_CREATE_DTM DESC
+
+SET @DML_COUNT = @@ROWCOUNT
+PRINT 'FATX MEMBER ACCUM ROWS: '+CAST(@DML_COUNT AS VARCHAR(20))
+
+-----------------------------------------------------------------------------------
+--  Step 1b.  Extract distinct subscribers, benefit per, (member) accum number
+--            FROM ##AHEAD_FATX_BAD_ROWS into tempdb.dbo.AHEAD_FATX_AFFECTED_SUBS
+--            This table is used for remediation and performance
+PRINT '1b.  Extract FATX Mbr accum rows into AFFECTED_SUBS'
+-----------------------------------------------------------------------------------
+
+DROP TABLE IF EXISTS tempdb.dbo.AHEAD_FATX_AFFECTED_SUBS
+SELECT DISTINCT SBSB_CK, FATX_BEN_BEG_DT, ACAC_ACC_NO
+INTO tempdb.dbo.AHEAD_FATX_AFFECTED_SUBS
+FROM ##AHEAD_FATX_BAD_ROWS
+
+SET @DML_COUNT = @@ROWCOUNT
+PRINT 'FATX TOTAL SUBS, BEN PERIOD, MBR ACCUMS: '+CAST(@DML_COUNT AS VARCHAR(20))
+
+----------------------------------------------------------------------
+--  2a.S1  Extract affected FATX rows for scenario 1:  L1 -> L2
+--PRINT 'EXTRACT ROWS FOR SCENARIO 1:  L1 -> L2 '
+----------------------------------------------------------------------
+
+DROP TABLE IF EXISTS ##AHEAD_FATX_1_2
+SELECT DISTINCT FATX.*
+INTO ##AHEAD_FATX_1_2
+FROM (SELECT DISTINCT SBSB_CK, FATX_BEN_BEG_DT
+      FROM tempdb.dbo.AHEAD_FATX_AFFECTED_SUBS
+      WHERE ACAC_ACC_NO = 1)          SUBS
+INNER JOIN facets.dbo.CMC_FATX_ACCUM_TXN         FATX
+   ON FATX.SBSB_CK = SUBS.SBSB_CK 
+   AND FATX.PDPD_ACC_SFX = 'MED'
+   AND FATX.FATX_BEN_BEG_DT = SUBS.FATX_BEN_BEG_DT
+   AND FATX.FATX_ACC_TYPE = 'L'
+   AND FATX.ACAC_ACC_NO IN (1,2)
+
+SET @DML_COUNT = @@ROWCOUNT
+PRINT 'FATX TOTAL ROWS AFFECTED SCENARIO 1 L1 -> L2: '+CAST(@DML_COUNT AS VARCHAR(20))
+
+----------------------------------------------------------------------
+--  2b.S1  Combine extracted FATX rows.  Recalculating\resetting fields
+--  Scenario :  L1 -> L2
+--PRINT 'CREATE NEW ROWS FOR SCENARIO 1: L1 -> L2'
+----------------------------------------------------------------------
+INSERT INTO tempdb.dbo.AHEAD_FATX_ACCUM_TXN_INS_ROWS
+SELECT      [SBSB_CK]
+           ,[PDPD_ACC_SFX]
+           ,[FATX_ACC_TYPE]
+           ,2   AS  [ACAC_ACC_NO]
+           ,[FATX_BEN_BEG_DT]
+           ,ROW_NUMBER ( )  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS [FATX_SEQ_NO]
+           ,[GRGR_CK]
+           ,[FATX_TXN_AMT1]
+           ,[FATX_TXN_AMT2]
+           ,[FATX_TXN_CTR1]
+           ,[FATX_TXN_CTR2]
+		   ,SUM(FATX_TXN_AMT1)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_AMT1
+           ,SUM(FATX_TXN_AMT2)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_AMT2
+           ,SUM(FATX_TXN_CTR1)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_CTR1
+           ,SUM(FATX_TXN_CTR2)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_CTR2
+           ,[FATX_PERSON_CTR]
+           ,[FATX_PERSON_CTR_CO]
+           ,[MEME_CK]
+           ,[FATX_CREATE_DTM]
+           ,[FATX_STS_IND]
+           ,[CLCL_ID]
+           ,[FATX_MCTR_RSN]
+           ,[FATX_EXTERNAL_ID]
+           ,[USUS_ID]
+           ,[FATX_PERIOD_TYPE]
+           ,[SYIN_INST]
+           ,[FATX_LOCK_TOKEN]
+           ,[ATXR_SOURCE_ID]
+           ,CASE WHEN [ACAC_ACC_NO] = 1 THEN CURRENT_TIMESTAMP ELSE [SYS_LAST_UPD_DTM] END  AS   [SYS_LAST_UPD_DTM]
+           ,[SYS_USUS_ID]
+           ,[SYS_DBUSER_ID]
+FROM ##AHEAD_FATX_1_2
+ORDER BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT], [FATX_CREATE_DTM]
+
+--  (3195008 rows affected)
+
+----------------------------------------------------------------------
+--  2a.S2  Extract affected FATX rows for scenario 1:  L5 -> L9
+--PRINT 'EXTRACT ROWS FOR SCENARIO 2: L5 -> L9'
+----------------------------------------------------------------------
+
+DROP TABLE IF EXISTS ##AHEAD_FATX_5_9
+
+SELECT DISTINCT FATX.*
+INTO ##AHEAD_FATX_5_9
+FROM (SELECT DISTINCT SBSB_CK, FATX_BEN_BEG_DT
+      FROM tempdb.dbo.AHEAD_FATX_AFFECTED_SUBS 
+      WHERE ACAC_ACC_NO = 5)          SUBS
+INNER JOIN facets.dbo.CMC_FATX_ACCUM_TXN         FATX
+   ON FATX.SBSB_CK = SUBS.SBSB_CK 
+   AND FATX.PDPD_ACC_SFX = 'MED'
+   AND FATX.FATX_BEN_BEG_DT = SUBS.FATX_BEN_BEG_DT
+   AND FATX.FATX_ACC_TYPE = 'L'
+   AND FATX.ACAC_ACC_NO IN (5,9)
+
+SET @DML_COUNT = @@ROWCOUNT
+PRINT 'FATX TOTAL ROWS AFFECTED SCENARIO 2 L5 -> L9: '+CAST(@DML_COUNT AS VARCHAR(20))
+
+----------------------------------------------------------------------
+--  2b.S2  Combine extracted FATX rows.  Recalculating\resetting field
+--  Scenario :  L5 -> L9
+--PRINT 'CREATE NEW ROWS FOR SCENARIO 2: L5 -> L9'
+----------------------------------------------------------------------
+
+INSERT INTO tempdb.dbo.AHEAD_FATX_ACCUM_TXN_INS_ROWS
+SELECT      [SBSB_CK]
+           ,[PDPD_ACC_SFX]
+           ,[FATX_ACC_TYPE]
+           ,9   AS  [ACAC_ACC_NO]
+           ,[FATX_BEN_BEG_DT]
+           ,ROW_NUMBER ( )  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS [FATX_SEQ_NO]
+           ,[GRGR_CK]
+           ,[FATX_TXN_AMT1]
+           ,[FATX_TXN_AMT2]
+           ,[FATX_TXN_CTR1]
+           ,[FATX_TXN_CTR2]
+		   ,SUM(FATX_TXN_AMT1)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_AMT1
+           ,SUM(FATX_TXN_AMT2)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_AMT2
+           ,SUM(FATX_TXN_CTR1)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_CTR1
+           ,SUM(FATX_TXN_CTR2)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_CTR2
+           ,[FATX_PERSON_CTR]
+           ,[FATX_PERSON_CTR_CO]
+           ,[MEME_CK]
+           ,[FATX_CREATE_DTM]
+           ,[FATX_STS_IND]
+           ,[CLCL_ID]
+           ,[FATX_MCTR_RSN]
+           ,[FATX_EXTERNAL_ID]
+           ,[USUS_ID]
+           ,[FATX_PERIOD_TYPE]
+           ,[SYIN_INST]
+           ,[FATX_LOCK_TOKEN]
+           ,[ATXR_SOURCE_ID]
+           ,CASE WHEN [ACAC_ACC_NO] = 5 THEN CURRENT_TIMESTAMP ELSE [SYS_LAST_UPD_DTM] END  AS   [SYS_LAST_UPD_DTM]
+           ,[SYS_USUS_ID]
+           ,[SYS_DBUSER_ID]
+FROM ##AHEAD_FATX_5_9
+ORDER BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT], [FATX_CREATE_DTM]
+
+----------------------------------------------------------------------
+--  2a.S3  Extract affected FATX rows for scenario 3:  L6 -> L10
+--PRINT 'EXTRACT ROWS FOR SCENARIO 3: L6 -> L10'
+----------------------------------------------------------------------
+
+DROP TABLE IF EXISTS ##AHEAD_FATX_6_10
+
+SELECT DISTINCT FATX.*
+INTO ##AHEAD_FATX_6_10
+FROM (SELECT DISTINCT SBSB_CK, FATX_BEN_BEG_DT
+      FROM tempdb.dbo.AHEAD_FATX_AFFECTED_SUBS
+      WHERE ACAC_ACC_NO = 6)          SUBS
+INNER JOIN facets.dbo.CMC_FATX_ACCUM_TXN         FATX
+   ON FATX.SBSB_CK = SUBS.SBSB_CK 
+   AND FATX.PDPD_ACC_SFX = 'MED'
+   AND FATX.FATX_BEN_BEG_DT = SUBS.FATX_BEN_BEG_DT
+   AND FATX.FATX_ACC_TYPE = 'L'
+   AND FATX.ACAC_ACC_NO IN (6,10)
+
+SET @DML_COUNT = @@ROWCOUNT
+PRINT 'FATX TOTAL ROWS AFFECTED SCENARIO 3 L6 -> L10: '+CAST(@DML_COUNT AS VARCHAR(20))
+----------------------------------------------------------------------
+--  2b.S3  Combine extracted FATX rows.  Recalculating\resetting field
+--  Scenario :  L6 -> L10
+--PRINT 'CREATE NEW ROWS FOR SCENARIO 3: L6 -> L10'
+----------------------------------------------------------------------
+
+INSERT INTO tempdb.dbo.AHEAD_FATX_ACCUM_TXN_INS_ROWS
+SELECT      [SBSB_CK]
+           ,[PDPD_ACC_SFX]
+           ,[FATX_ACC_TYPE]
+           ,10   AS  [ACAC_ACC_NO]
+           ,[FATX_BEN_BEG_DT]
+           ,ROW_NUMBER ( )  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS [FATX_SEQ_NO]
+           ,[GRGR_CK]
+           ,[FATX_TXN_AMT1]
+           ,[FATX_TXN_AMT2]
+           ,[FATX_TXN_CTR1]
+           ,[FATX_TXN_CTR2]
+		   ,SUM(FATX_TXN_AMT1)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_AMT1
+           ,SUM(FATX_TXN_AMT2)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_AMT2
+           ,SUM(FATX_TXN_CTR1)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_CTR1
+           ,SUM(FATX_TXN_CTR2)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_CTR2
+           ,[FATX_PERSON_CTR]
+           ,[FATX_PERSON_CTR_CO]
+           ,[MEME_CK]
+           ,[FATX_CREATE_DTM]
+           ,[FATX_STS_IND]
+           ,[CLCL_ID]
+           ,[FATX_MCTR_RSN]
+           ,[FATX_EXTERNAL_ID]
+           ,[USUS_ID]
+           ,[FATX_PERIOD_TYPE]
+           ,[SYIN_INST]
+           ,[FATX_LOCK_TOKEN]
+           ,[ATXR_SOURCE_ID]
+           ,CASE WHEN [ACAC_ACC_NO] = 6 THEN CURRENT_TIMESTAMP ELSE [SYS_LAST_UPD_DTM] END  AS   [SYS_LAST_UPD_DTM]
+           ,[SYS_USUS_ID]
+           ,[SYS_DBUSER_ID]
+FROM ##AHEAD_FATX_6_10
+ORDER BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT], [FATX_CREATE_DTM]
+
+----------------------------------------------------------------------
+--  2a.S4 Extract affected FATX rows for scenario 4:  L7 -> L8
+--PRINT 'EXTRACT ROWS FOR SCENARIO 4: L7 -> L8'
+----------------------------------------------------------------------
+
+DROP TABLE IF EXISTS ##AHEAD_FATX_7_8
+SELECT DISTINCT FATX.*
+INTO ##AHEAD_FATX_7_8
+FROM (SELECT DISTINCT SBSB_CK, FATX_BEN_BEG_DT
+      FROM tempdb.dbo.AHEAD_FATX_AFFECTED_SUBS
+      WHERE ACAC_ACC_NO = 7)          SUBS
+INNER JOIN facets.dbo.CMC_FATX_ACCUM_TXN         FATX
+   ON FATX.SBSB_CK = SUBS.SBSB_CK 
+   AND FATX.PDPD_ACC_SFX = 'MED'
+   AND FATX.FATX_BEN_BEG_DT = SUBS.FATX_BEN_BEG_DT
+   AND FATX.FATX_ACC_TYPE = 'L'
+   AND FATX.ACAC_ACC_NO IN (7,8)
+
+SET @DML_COUNT = @@ROWCOUNT
+PRINT 'FATX TOTAL ROWS AFFECTED SCENARIO 4 L7 -> L8: '+CAST(@DML_COUNT AS VARCHAR(20))
+
+----------------------------------------------------------------------
+--  2b.S4  Combine extracted FATX rows.  Recalculating\resetting field
+--  Scenario :  L7 -> L8
+--PRINT 'CREATE NEW ROWS FOR SCENARIO 4: L7 -> L8'
+----------------------------------------------------------------------
+
+INSERT INTO tempdb.dbo.AHEAD_FATX_ACCUM_TXN_INS_ROWS
+SELECT      [SBSB_CK]
+           ,[PDPD_ACC_SFX]
+           ,[FATX_ACC_TYPE]
+           ,8   AS  [ACAC_ACC_NO]
+           ,[FATX_BEN_BEG_DT]
+           ,ROW_NUMBER ( )  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS [FATX_SEQ_NO]
+           ,[GRGR_CK]
+           ,[FATX_TXN_AMT1]
+           ,[FATX_TXN_AMT2]
+           ,[FATX_TXN_CTR1]
+           ,[FATX_TXN_CTR2]
+		   ,SUM(FATX_TXN_AMT1)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_AMT1
+           ,SUM(FATX_TXN_AMT2)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_AMT2
+           ,SUM(FATX_TXN_CTR1)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_CTR1
+           ,SUM(FATX_TXN_CTR2)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_CTR2
+           ,[FATX_PERSON_CTR]
+           ,[FATX_PERSON_CTR_CO]
+           ,[MEME_CK]
+           ,[FATX_CREATE_DTM]
+           ,[FATX_STS_IND]
+           ,[CLCL_ID]
+           ,[FATX_MCTR_RSN]
+           ,[FATX_EXTERNAL_ID]
+           ,[USUS_ID]
+           ,[FATX_PERIOD_TYPE]
+           ,[SYIN_INST]
+           ,[FATX_LOCK_TOKEN]
+           ,[ATXR_SOURCE_ID]
+           ,CASE WHEN [ACAC_ACC_NO] = 7 THEN CURRENT_TIMESTAMP ELSE [SYS_LAST_UPD_DTM] END  AS   [SYS_LAST_UPD_DTM]
+           ,[SYS_USUS_ID]
+           ,[SYS_DBUSER_ID]
+FROM ##AHEAD_FATX_7_8
+ORDER BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT], [FATX_CREATE_DTM]
+
+----------------------------------------------------------------------
+--  2a.S5  Extract affected FATX rows for scenario 5:  L906 -> L907
+--PRINT 'EXTRACT ROWS FOR SCENARIO 5: L906 -> L907'
+----------------------------------------------------------------------
+
+DROP TABLE IF EXISTS ##AHEAD_FATX_906_907
+SELECT DISTINCT FATX.*
+INTO ##AHEAD_FATX_906_907
+FROM (SELECT DISTINCT SBSB_CK, FATX_BEN_BEG_DT
+      FROM tempdb.dbo.AHEAD_FATX_AFFECTED_SUBS 
+      WHERE ACAC_ACC_NO = 906)          SUBS
+INNER JOIN facets.dbo.CMC_FATX_ACCUM_TXN         FATX
+   ON FATX.SBSB_CK = SUBS.SBSB_CK 
+   AND FATX.PDPD_ACC_SFX = 'MED'
+   AND FATX.FATX_BEN_BEG_DT = SUBS.FATX_BEN_BEG_DT
+   AND FATX.FATX_ACC_TYPE = 'L'
+   AND FATX.ACAC_ACC_NO IN (906,907)
+
+SET @DML_COUNT = @@ROWCOUNT
+PRINT 'FATX TOTAL ROWS AFFECTED SCENARIO 5 L906 -> L907: '+CAST(@DML_COUNT AS VARCHAR(20))
+
+----------------------------------------------------------------------
+--  2b.S5  Combine extracted FATX rows.  Recalculating\resetting field
+--  Scenario :  L906 -> L907
+--PRINT 'CREATE NEW ROWS FOR SCENARIO 5: L906 -> L907'
+----------------------------------------------------------------------
+
+INSERT INTO tempdb.dbo.AHEAD_FATX_ACCUM_TXN_INS_ROWS
+SELECT      [SBSB_CK]
+           ,[PDPD_ACC_SFX]
+           ,[FATX_ACC_TYPE]
+           ,907  AS  [ACAC_ACC_NO]
+           ,[FATX_BEN_BEG_DT]
+           ,ROW_NUMBER ( )  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS [FATX_SEQ_NO]
+           ,[GRGR_CK]
+           ,[FATX_TXN_AMT1]
+           ,[FATX_TXN_AMT2]
+           ,[FATX_TXN_CTR1]
+           ,[FATX_TXN_CTR2]
+		   ,SUM(FATX_TXN_AMT1)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_AMT1
+           ,SUM(FATX_TXN_AMT2)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_AMT2
+           ,SUM(FATX_TXN_CTR1)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_CTR1
+           ,SUM(FATX_TXN_CTR2)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_CTR2
+           ,[FATX_PERSON_CTR]
+           ,[FATX_PERSON_CTR_CO]
+           ,[MEME_CK]
+           ,[FATX_CREATE_DTM]
+           ,[FATX_STS_IND]
+           ,[CLCL_ID]
+           ,[FATX_MCTR_RSN]
+           ,[FATX_EXTERNAL_ID]
+           ,[USUS_ID]
+           ,[FATX_PERIOD_TYPE]
+           ,[SYIN_INST]
+           ,[FATX_LOCK_TOKEN]
+           ,[ATXR_SOURCE_ID]
+           ,CASE WHEN [ACAC_ACC_NO] = 906 THEN CURRENT_TIMESTAMP ELSE [SYS_LAST_UPD_DTM] END  AS   [SYS_LAST_UPD_DTM]
+           ,[SYS_USUS_ID]
+           ,[SYS_DBUSER_ID]
+FROM ##AHEAD_FATX_906_907
+ORDER BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT], [FATX_CREATE_DTM]
+
+----------------------------------------------------------------------
+--  2a.S6  Extract affected FATX rows for scenario 5:  L908 -> L910
+--PRINT 'EXTRACT ROWS FOR SCENARIO 6: L908 -> L910'
+----------------------------------------------------------------------
+
+DROP TABLE IF EXISTS ##AHEAD_FATX_908_910
+SELECT DISTINCT FATX.*
+INTO ##AHEAD_FATX_908_910
+FROM (SELECT DISTINCT SBSB_CK, FATX_BEN_BEG_DT
+      FROM tempdb.dbo.AHEAD_FATX_AFFECTED_SUBS
+      WHERE ACAC_ACC_NO = 908)          SUBS
+INNER JOIN facets.dbo.CMC_FATX_ACCUM_TXN         FATX
+   ON FATX.SBSB_CK = SUBS.SBSB_CK 
+   AND FATX.PDPD_ACC_SFX = 'MED'
+   AND FATX.FATX_BEN_BEG_DT = SUBS.FATX_BEN_BEG_DT
+   AND FATX.FATX_ACC_TYPE = 'L'
+   AND FATX.ACAC_ACC_NO IN (908,910)
+
+SET @DML_COUNT = @@ROWCOUNT
+PRINT 'FATX TOTAL ROWS AFFECTED SCENARIO 6 L908 -> L910: '+CAST(@DML_COUNT AS VARCHAR(20))
+----------------------------------------------------------------------
+--  2b.S6  Combine extracted FATX rows.  Recalculating\resetting field
+--  Scenario :  L908 -> L910
+--PRINT 'CREATE NEW ROWS FOR SCENARIO 6: L908 -> L910'
+----------------------------------------------------------------------
+
+INSERT INTO tempdb.dbo.AHEAD_FATX_ACCUM_TXN_INS_ROWS
+SELECT      [SBSB_CK]
+           ,[PDPD_ACC_SFX]
+           ,[FATX_ACC_TYPE]
+           ,910  AS  [ACAC_ACC_NO]
+           ,[FATX_BEN_BEG_DT]
+           ,ROW_NUMBER ( )  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS [FATX_SEQ_NO]
+           ,[GRGR_CK]
+           ,[FATX_TXN_AMT1]
+           ,[FATX_TXN_AMT2]
+           ,[FATX_TXN_CTR1]
+           ,[FATX_TXN_CTR2]
+		   ,SUM(FATX_TXN_AMT1)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_AMT1
+           ,SUM(FATX_TXN_AMT2)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_AMT2
+           ,SUM(FATX_TXN_CTR1)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_CTR1
+           ,SUM(FATX_TXN_CTR2)  OVER (PARTITION BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT] ORDER BY [FATX_CREATE_DTM]) AS  FATX_CTR2
+           ,[FATX_PERSON_CTR]
+           ,[FATX_PERSON_CTR_CO]
+           ,[MEME_CK]
+           ,[FATX_CREATE_DTM]
+           ,[FATX_STS_IND]
+           ,[CLCL_ID]
+           ,[FATX_MCTR_RSN]
+           ,[FATX_EXTERNAL_ID]
+           ,[USUS_ID]
+           ,[FATX_PERIOD_TYPE]
+           ,[SYIN_INST]
+           ,[FATX_LOCK_TOKEN]
+           ,[ATXR_SOURCE_ID]
+           ,CASE WHEN [ACAC_ACC_NO] = 908 THEN CURRENT_TIMESTAMP ELSE [SYS_LAST_UPD_DTM] END  AS   [SYS_LAST_UPD_DTM]
+           ,[SYS_USUS_ID]
+           ,[SYS_DBUSER_ID]
+FROM ##AHEAD_FATX_908_910
+ORDER BY [SBSB_CK], [PDPD_ACC_SFX], [FATX_ACC_TYPE], [FATX_BEN_BEG_DT], [FATX_CREATE_DTM]
+
+-------------------------------------------------------
+-------------------------------------------------------
+PRINT '3.  Backup all rows to be deleted'
+-------------------------------------------------------
+-------------------------------------------------------
+
+TRUNCATE TABLE tempdb.dbo.AHEAD_FATX_ACCUM_TXN_DEL_ROWS
+
+INSERT INTO tempdb.dbo.AHEAD_FATX_ACCUM_TXN_DEL_ROWS
+SELECT * FROM ##AHEAD_FATX_1_2 UNION
+SELECT * FROM ##AHEAD_FATX_5_9  UNION
+SELECT * FROM ##AHEAD_FATX_6_10  UNION
+SELECT * FROM ##AHEAD_FATX_7_8  UNION
+SELECT * FROM ##AHEAD_FATX_906_907  UNION
+SELECT * FROM ##AHEAD_FATX_908_910
+
+SET @DML_COUNT = @@ROWCOUNT
+SET @DEL_COUNT = @DML_COUNT
+PRINT 'FATX ROWS TO BE DELETED: '+CAST(@DML_COUNT AS VARCHAR(20))
+
+PRINT 'CREATING INDEX ON INSERT TABLE'
+
+CREATE INDEX ##AHEAD_FATX_DEL_IDX 
+ON tempdb.dbo.AHEAD_FATX_ACCUM_TXN_DEL_ROWS
+(SBSB_CK,PDPD_ACC_SFX,FATX_ACC_TYPE,ACAC_ACC_NO,FATX_BEN_BEG_DT,FATX_SEQ_NO)
+
+-------------------------------------------------------
+-------------------------------------------------------
+PRINT '4.  Delete FATX rows for all scenarios'
+PRINT CURRENT_TIMESTAMP
+-------------------------------------------------------
+-------------------------------------------------------
+
+DELETE FATX
+FROM facets.dbo.CMC_FATX_ACCUM_TXN                    FATX
+INNER JOIN tempdb.dbo.AHEAD_FATX_ACCUM_TXN_DEL_ROWS     DEL
+ON FATX.SBSB_CK = DEL.SBSB_CK
+AND FATX.FATX_BEN_BEG_DT = DEL.FATX_BEN_BEG_DT
+AND FATX.ACAC_ACC_NO = DEL.ACAC_ACC_NO
+AND FATX.FATX_ACC_TYPE = DEL.FATX_ACC_TYPE
+AND FATX.PDPD_ACC_SFX = DEL.PDPD_ACC_SFX
+AND FATX.FATX_SEQ_NO = DEL.FATX_SEQ_NO
+
+SET @DML_COUNT = @@ROWCOUNT
+PRINT 'FATX ROWS DELETED: '+CAST(@DML_COUNT AS VARCHAR(20))
+
+IF @DEL_COUNT <> @DML_COUNT
+   BEGIN
+   PRINT 'FATX DELETE COUNT DOES NOT MATCH EXPECTED COUNT'
+   END
+----------------------------------------------------------------------
+PRINT '5. Insert all new FATX for all Scenarios'
+----------------------------------------------------------------------
+
+select  @DML_COUNT = count(*) from tempdb.dbo.AHEAD_FATX_ACCUM_TXN_INS_ROWS
+SET @INS_COUNT = @DML_COUNT
+PRINT 'FATX ROWS TO BE INSERTED: '+CAST(@DML_COUNT AS VARCHAR(20))
+PRINT CURRENT_TIMESTAMP
+
+INSERT INTO facets.dbo.CMC_FATX_ACCUM_TXN 
+SELECT * FROM tempdb.dbo.AHEAD_FATX_ACCUM_TXN_INS_ROWS
+
+SET @DML_COUNT = @@ROWCOUNT
+
+PRINT 'FATX ROWS INSERTED: '+CAST(@DML_COUNT AS VARCHAR(20))
+PRINT CURRENT_TIMESTAMP
+
+IF @INS_COUNT <> @DML_COUNT
+   BEGIN
+   PRINT 'FATX INSERT COUNT DOES NOT MATCH EXPECTED COUNT'
+   END
+
+----------------------------------------------------------------------
+-- VALIDATION THAT DELETE COUNT MATCHES INSERT COUNT
+----------------------------------------------------------------------
+
+IF @DEL_COUNT <> @INS_COUNT
+   BEGIN
+   PRINT 'FATX DELETE AND INSERT COUNTS DO NOT MATCH'
+   END
+
+
+PRINT 'PGM END '+CAST(GETDATE() AS VARCHAR(25))
+
+
+Facets BCP:
+
+set DBName=facets
+set SName=dbo
+
+echo off
+
+for %%x in (
+CMC_CDPP_LI_ITS_PR
+CMC_CLCL_CLAIM
+CDS_INSI_SB_INDIC
+CMC_CEIP_REL_CRIT
+) do (
+
+echo %%x %DBName% %SName% 
+
+RunBCP.bat  %%x %DBName% %SName% 
+
+)
+
+
+
+
